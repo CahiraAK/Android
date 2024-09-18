@@ -25,6 +25,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.withContext
 
 interface CsvPasswordImporter {
+    suspend fun readCsv(blob: String): List<LoginCredentials>
     suspend fun readCsv(fileUri: Uri): List<LoginCredentials>
 }
 
@@ -35,19 +36,33 @@ class GooglePasswordManagerCsvPasswordImporter @Inject constructor(
     private val credentialValidator: ImportedPasswordValidator,
     private val domainNameNormalizer: DomainNameNormalizer,
     private val dispatchers: DispatcherProvider,
+    private val blobDecoder: GooglePasswordBlobDecoder,
 ) : CsvPasswordImporter {
+
+    override suspend fun readCsv(blob: String): List<LoginCredentials> {
+        return kotlin.runCatching {
+            withContext(dispatchers.io()) {
+                val csv = blobDecoder.decode(blob)
+                importPasswords(csv)
+            }
+        }.getOrElse { emptyList() }
+    }
 
     override suspend fun readCsv(fileUri: Uri): List<LoginCredentials> {
         return kotlin.runCatching {
             withContext(dispatchers.io()) {
                 val csv = fileReader.readCsvFile(fileUri)
-                val allPasswords = parser.parseCsv(csv)
-                val dedupedPasswords = allPasswords.distinct()
-                val validPasswords = filterValidPasswords(dedupedPasswords)
-                val normalizedDomains = domainNameNormalizer.normalizeDomains(validPasswords)
-                return@withContext normalizedDomains
+                importPasswords(csv)
             }
         }.getOrElse { emptyList() }
+    }
+
+    private suspend fun importPasswords(csv: String): List<LoginCredentials> {
+        val allPasswords = parser.parseCsv(csv)
+        val dedupedPasswords = allPasswords.distinct()
+        val validPasswords = filterValidPasswords(dedupedPasswords)
+        val normalizedDomains = domainNameNormalizer.normalizeDomains(validPasswords)
+        return normalizedDomains
     }
 
     private fun filterValidPasswords(passwords: List<LoginCredentials>): List<LoginCredentials> {
