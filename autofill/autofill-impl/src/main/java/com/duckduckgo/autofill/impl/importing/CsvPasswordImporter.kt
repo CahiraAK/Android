@@ -17,16 +17,28 @@
 package com.duckduckgo.autofill.impl.importing
 
 import android.net.Uri
+import android.os.Parcelable
 import com.duckduckgo.autofill.api.domain.app.LoginCredentials
+import com.duckduckgo.autofill.impl.importing.CsvPasswordImporter.ParseResult
+import com.duckduckgo.autofill.impl.importing.CsvPasswordImporter.ParseResult.Success
 import com.duckduckgo.common.utils.DispatcherProvider
 import com.duckduckgo.di.scopes.AppScope
 import com.squareup.anvil.annotations.ContributesBinding
 import javax.inject.Inject
 import kotlinx.coroutines.withContext
+import kotlinx.parcelize.Parcelize
 
 interface CsvPasswordImporter {
-    suspend fun readCsv(blob: String): List<LoginCredentials>
-    suspend fun readCsv(fileUri: Uri): List<LoginCredentials>
+    suspend fun readCsv(blob: String): ParseResult
+    suspend fun readCsv(fileUri: Uri): ParseResult
+
+    sealed interface ParseResult : Parcelable {
+        @Parcelize
+        data class Success(val numberPasswordsInSource: Int, val loginCredentialsToImport: List<LoginCredentials>) : ParseResult
+
+        @Parcelize
+        data object Error : ParseResult
+    }
 }
 
 @ContributesBinding(AppScope::class)
@@ -39,30 +51,30 @@ class GooglePasswordManagerCsvPasswordImporter @Inject constructor(
     private val blobDecoder: GooglePasswordBlobDecoder,
 ) : CsvPasswordImporter {
 
-    override suspend fun readCsv(blob: String): List<LoginCredentials> {
+    override suspend fun readCsv(blob: String): ParseResult {
         return kotlin.runCatching {
             withContext(dispatchers.io()) {
                 val csv = blobDecoder.decode(blob)
-                importPasswords(csv)
+                convertToLoginCredentials(csv)
             }
-        }.getOrElse { emptyList() }
+        }.getOrElse { ParseResult.Error }
     }
 
-    override suspend fun readCsv(fileUri: Uri): List<LoginCredentials> {
+    override suspend fun readCsv(fileUri: Uri): ParseResult {
         return kotlin.runCatching {
             withContext(dispatchers.io()) {
                 val csv = fileReader.readCsvFile(fileUri)
-                importPasswords(csv)
+                convertToLoginCredentials(csv)
             }
-        }.getOrElse { emptyList() }
+        }.getOrElse { ParseResult.Error }
     }
 
-    private suspend fun importPasswords(csv: String): List<LoginCredentials> {
+    private suspend fun convertToLoginCredentials(csv: String): Success {
         val allPasswords = parser.parseCsv(csv)
         val dedupedPasswords = allPasswords.distinct()
         val validPasswords = filterValidPasswords(dedupedPasswords)
         val normalizedDomains = domainNameNormalizer.normalizeDomains(validPasswords)
-        return normalizedDomains
+        return Success(allPasswords.size, normalizedDomains)
     }
 
     private fun filterValidPasswords(passwords: List<LoginCredentials>): List<LoginCredentials> {

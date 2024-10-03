@@ -18,19 +18,38 @@ package com.duckduckgo.autofill.impl.importing
 
 import com.duckduckgo.autofill.api.domain.app.LoginCredentials
 import com.duckduckgo.autofill.impl.importing.PasswordImporter.ImportResult
+import com.duckduckgo.autofill.impl.importing.PasswordImporter.ImportResult.Finished
+import com.duckduckgo.autofill.impl.importing.PasswordImporter.ImportResult.InProgress
 import com.duckduckgo.autofill.impl.store.InternalAutofillStore
 import com.duckduckgo.common.utils.DispatcherProvider
 import com.duckduckgo.di.scopes.AppScope
 import com.squareup.anvil.annotations.ContributesBinding
+import dagger.SingleInstanceIn
 import javax.inject.Inject
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.withContext
 
 interface PasswordImporter {
-    suspend fun importPasswords(importList: List<LoginCredentials>): ImportResult
+    suspend fun importPasswords(importList: List<LoginCredentials>)
+    fun getImportStatus(): Flow<ImportResult>
 
-    data class ImportResult(val savedCredentialIds: List<Long>, val duplicatedPasswords: List<LoginCredentials>)
+    sealed interface ImportResult {
+        data class InProgress(
+            val savedCredentialIds: List<Long>,
+            val duplicatedPasswords: List<LoginCredentials>,
+            val importListSize: Int,
+        ) : ImportResult
+
+        data class Finished(
+            val savedCredentialIds: List<Long>,
+            val duplicatedPasswords: List<LoginCredentials>,
+            val importListSize: Int,
+        ) : ImportResult
+    }
 }
 
+@SingleInstanceIn(AppScope::class)
 @ContributesBinding(AppScope::class)
 class PasswordImporterImpl @Inject constructor(
     private val existingPasswordMatchDetector: ExistingPasswordMatchDetector,
@@ -38,7 +57,9 @@ class PasswordImporterImpl @Inject constructor(
     private val dispatchers: DispatcherProvider,
 ) : PasswordImporter {
 
-    override suspend fun importPasswords(importList: List<LoginCredentials>): ImportResult {
+    private val _importStatus = MutableSharedFlow<ImportResult>(replay = 1)
+
+    override suspend fun importPasswords(importList: List<LoginCredentials>) {
         return withContext(dispatchers.io()) {
             val savedCredentialIds = mutableListOf<Long>()
             val duplicatedPasswords = mutableListOf<LoginCredentials>()
@@ -53,9 +74,15 @@ class PasswordImporterImpl @Inject constructor(
                 } else {
                     duplicatedPasswords.add(it)
                 }
+
+                _importStatus.emit(InProgress(savedCredentialIds, duplicatedPasswords, importList.size))
             }
 
-            ImportResult(savedCredentialIds, duplicatedPasswords)
+            _importStatus.emit(Finished(savedCredentialIds, duplicatedPasswords, importList.size))
         }
+    }
+
+    override fun getImportStatus(): Flow<ImportResult> {
+        return _importStatus
     }
 }
