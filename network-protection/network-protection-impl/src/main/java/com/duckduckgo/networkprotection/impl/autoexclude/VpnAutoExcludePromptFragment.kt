@@ -43,14 +43,18 @@ import com.duckduckgo.networkprotection.impl.autoexclude.VpnAutoExcludePromptVie
 import com.duckduckgo.networkprotection.impl.databinding.DialogAutoExcludeBinding
 import com.duckduckgo.networkprotection.impl.databinding.ItemAutoexcludePromptAppBinding
 import com.duckduckgo.networkprotection.store.db.VpnIncompatibleApp
+import com.google.android.material.bottomsheet.BottomSheetBehavior
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import dagger.android.support.AndroidSupportInjection
 import javax.inject.Inject
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.onStart
 
 @InjectWith(FragmentScope::class)
-class VpnAutoExcludePromptFragment private constructor() : BottomSheetDialogFragment() {
+class VpnAutoExcludePromptFragment : BottomSheetDialogFragment() {
     interface Listener {
         fun onAutoExcludeEnabled()
     }
@@ -81,19 +85,6 @@ class VpnAutoExcludePromptFragment private constructor() : BottomSheetDialogFrag
         }.root
     }
 
-    override fun onStart() {
-        super.onStart()
-        viewModel.onPromptShown(
-            requireArguments().getStringArrayList(KEY_PROMPT_APP_PACKAGES)?.toList() ?: emptyList(),
-            if (Build.VERSION.SDK_INT >= 33) {
-                requireArguments().getSerializable(KEY_PROMPT_SOURCE, Source::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                requireArguments().getSerializable(KEY_PROMPT_SOURCE) as? Source
-            } ?: UNKNOWN,
-        )
-    }
-
     fun addListener(listener: Listener) {
         _listener = listener
     }
@@ -101,7 +92,19 @@ class VpnAutoExcludePromptFragment private constructor() : BottomSheetDialogFrag
     private fun observerViewModel(binding: DialogAutoExcludeBinding) {
         viewModel.viewState()
             .flowWithLifecycle(lifecycle, Lifecycle.State.STARTED)
+            .distinctUntilChanged()
             .onEach { renderViewState(binding, it) }
+            .onStart {
+                viewModel.onPromptShown(
+                    requireArguments().getStringArrayList(KEY_PROMPT_APP_PACKAGES)?.toList() ?: emptyList(),
+                    if (Build.VERSION.SDK_INT >= 33) {
+                        requireArguments().getSerializable(KEY_PROMPT_SOURCE, Source::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        requireArguments().getSerializable(KEY_PROMPT_SOURCE) as? Source
+                    } ?: UNKNOWN,
+                )
+            }
             .launchIn(lifecycleScope)
     }
 
@@ -156,6 +159,7 @@ class VpnAutoExcludePromptFragment private constructor() : BottomSheetDialogFrag
     }
 
     private fun configureViews(binding: DialogAutoExcludeBinding) {
+        (dialog as BottomSheetDialog).behavior.state = BottomSheetBehavior.STATE_EXPANDED
         binding.apply {
             autoExcludeCheckBox.format()
             autoExcludePromptAddAction.setOnClickListener {
